@@ -14,12 +14,6 @@ OpenStatus::runTime operator+(OpenStatus::runTime lhs,OpenStatus::runTime rhs)
 
 MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
 {
-    server=new tcpServer;
-    if(!server->listen(QHostAddress::Any,2333))
-    {
-        addTextToInfoDisplayBox(tr("检测到端口被占用\n服务器启动失败\n请联系技术人员检查端口\n"));
-    }
-
     createStatusLight();
     createConsole();
     createAll();
@@ -28,7 +22,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
     setWindowTitle(tr("Console"));
     //showFullScreen();
 
-    addTextToInfoDisplayBox(tr("服务器启动成功\n"));
+    addTextToInfoDisplayBox(tr("主机启动成功\n"));
     readData();
     saveTimer->start(saveCycle);
 }
@@ -252,7 +246,7 @@ void MainWindow::createStatusLight()
     for(int i=0;i!=communityAirConditionerNum;++i)
     {
         communityAirConditioner[i]=
-                new OpenStatus(baseId.sprintf("户%d空%d",(i+1)/2+1,(i%2)+1),this,OpenStatus::AirConditioner);
+                new OpenStatus(baseId.sprintf("户%d空%d",i/2+1,(i%2)+1),this,OpenStatus::AirConditioner);
         communityLayout->addWidget(communityAirConditioner[i],j,k++);
         if(k==8)
         {
@@ -326,6 +320,9 @@ void MainWindow::setDeviceStatus(deviceLocal local,int deviceNum,deviceStatus st
 
 void MainWindow::createConsole()
 {
+    comLabel=new QLabel(tr("串口选择:"));
+    ComBox=new QComboBox;
+    UartSwitch=new QPushButton(tr("开始监控"));
     ConsoleLabel=new QLabel(tr("查询信息:"));
     lightLayoutControl=new QComboBox;
     lightLayoutControlLabel=new QLabel(tr("界面切换:"));
@@ -348,12 +345,33 @@ void MainWindow::createConsole()
 
     saveTimer=new QTimer(this);
 
+    /*自动更新可用串口*/
+    updateSerialInfo=new QTimer;
+    updateSerialInfo->start(1000);
+    connect(updateSerialInfo,&QTimer::timeout,[=](){
+        static QList<QSerialPortInfo> proList;
+        QList<QSerialPortInfo> nowList;
+        for(auto &SerialInfo:QSerialPortInfo::availablePorts())
+        {
+            nowList+=SerialInfo;
+        }
+        if(nowList==proList)
+        {
+            return;
+        }
+        else
+        {
+            updateComBox(nowList);
+            addTextToInfoDisplayBox(tr("检测到串口改变\n"));
+        }
+        proList=nowList;
+    });
+
     /*界面切换*/
     lightLayoutControl->addItem(tr("宿舍热水"));
     lightLayoutControl->addItem(tr("宿舍空调"));
     lightLayoutControl->addItem(tr("别墅"));
     lightLayoutControl->addItem(tr("普通住户"));
-
     connect(lightLayoutControl,SIGNAL(currentIndexChanged(int)),statusLightLayout,SLOT(setCurrentIndex(int)));
 
     /*关闭窗口*/
@@ -365,15 +383,20 @@ void MainWindow::createConsole()
     /*处理查询*/
     connect(searchStart,SIGNAL(clicked()),this,SLOT(dealSearch()));
 
+    /*串口开关*/
+    connect(UartSwitch,SIGNAL(clicked()),this,SLOT(comSwitch()));
+
     /*接收数据*/
-    connect(server,SIGNAL(hostMessage(const std::string &)),this,SLOT(ReceiveData(const std::string &)));
-    connect(server,SIGNAL(deviceConnected(const QString &)),this,SLOT(addTextToInfoDisplayBox(const QString &)));
-    connect(server,SIGNAL(deviceDisconnected(const QString &)),this,SLOT(addTextToInfoDisplayBox(const QString &)));
+    ReceiveTimer=new QTimer;
+    connect(ReceiveTimer,SIGNAL(timeout()),this,SLOT(ReceiveData()));
 
     /*数据存档*/
     connect(saveTimer,SIGNAL(timeout()),this,SLOT(saveData()));
 
     UartSetLayout=new QVBoxLayout;
+    UartSetLayout->addWidget(comLabel);
+    UartSetLayout->addWidget(ComBox);
+    UartSetLayout->addWidget(UartSwitch);
     UartSetLayout->addWidget(ConsoleLabel);
     UartSetLayout->addWidget(searchBox);
     UartSetLayout->addWidget(searchStart);
@@ -386,6 +409,111 @@ void MainWindow::createConsole()
     UartSetLayout->addWidget(InfoDisplayLabel);
     UartSetLayout->addWidget(InfoDisplayBox);
     UartSetLayout->addWidget(cleanInfoDisplayBox);
+}
+
+void MainWindow::comSwitch()
+{
+    if(fComOpen==false)
+    {
+        /*打开串口*/
+        ser.setPortName(QString("\\\\.\\")+getComName(ComBox->currentText()));
+        ser.setBaudRate(115200);
+        ser.setDataBits(QSerialPort::Data8);
+        ser.setParity(QSerialPort::NoParity);
+        ser.setStopBits(QSerialPort::OneStop);
+
+        if(ser.open(QIODevice::ReadWrite)==false)
+        {
+            addTextToInfoDisplayBox(tr("串口正在被占用"));
+            return;
+        }
+        fComOpen=true;
+        ReceiveTimer->start(ReceiveCycle);
+        UartSwitch->setText(tr("结束监控"));
+
+        ComBox->setEnabled(false);
+    }
+    else
+    {
+        UartSwitch->setText(tr("开始监控"));
+        fComOpen=false;
+        /*关闭串口*/
+        ser.close();
+        ReceiveTimer->stop();
+        ComBox->setEnabled(true);
+    }
+}
+
+void MainWindow::updateComBox(const QList<QSerialPortInfo> &now)
+{
+    /*寻找减少*/
+    for(int i=0;i<ComBox->count();i++)
+    {
+        auto inow=now.begin();
+        for(;inow!=now.end();++inow)
+        {
+            if(ComBox->itemText(i)==inow->description()+" "+inow->portName())
+            {
+                break;
+            }
+        }
+        if(inow==now.end())
+        {
+            ComBox->removeItem(i);
+        }
+    }
+
+    /*寻找增加*/
+    for(auto inow=now.begin();inow!=now.end();++inow)
+    {
+        int i=0;
+        for(;i<ComBox->count();i++)
+        {
+            if(ComBox->itemText(i)==inow->description()+" "+inow->portName())
+            {
+                break;
+            }
+        }
+        if(i==ComBox->count())
+        {
+            ComBox->addItem(inow->description()+" "+inow->portName());
+        }
+    }
+
+    /*自适应调整下拉宽度*/
+    int maxLen=0;
+    for(auto &i:now)
+    {
+        if(maxLen<(i.description()+" "+i.portName()).size())
+        {
+            maxLen=(i.description()+" "+i.portName()).size();
+        }
+    }
+
+    ComBox->view()->setMinimumWidth(maxLen*6+10);
+}
+
+QString MainWindow::getComName(const QString &ComBoxText)
+{
+    QString result;
+
+    auto pText=ComBoxText.end();
+    --pText;
+    for(;*pText!=' ';--pText);
+    pText++;
+
+    for(;pText!=ComBoxText.end();++pText)
+    {
+        result+=*pText;
+    }
+
+    return result;
+}
+
+bool operator==(const QSerialPortInfo &lhs,const QSerialPortInfo &rhs)
+{
+    return lhs.portName()==rhs.portName() &&
+           lhs.description()==rhs.description();
 }
 
 void MainWindow::dealSearch()
@@ -617,15 +745,15 @@ void MainWindow::dealSearch()
                 switch(communityWarm[i]->getGear())
                 {
                 default:break;
-                case OpenStatus::low:temp+=tr("地暖设备%1档位:低").arg(i+1);break;
-                case OpenStatus::median:temp+=tr("地暖设备%1档位:中").arg(i+1);break;
-                case OpenStatus::high:temp+=tr("地暖设备%1档位:高").arg(i+1);break;
+                case OpenStatus::low:temp+=tr("地暖设备%1档位:低").arg(i-localNum*2+1);break;
+                case OpenStatus::median:temp+=tr("地暖设备%1档位:中").arg(i-localNum*2+1);break;
+                case OpenStatus::high:temp+=tr("地暖设备%1档位:高").arg(i-localNum*2+1);break;
                 }
                 temp+=tr("\n温度:%1\n").arg(communityWarm[i]->getTemperature());
             }
             else
             {
-                temp+=tr("地暖设备%1已关闭\n").arg(i+1);
+                temp+=tr("地暖设备%1已关闭\n").arg(i-localNum*2+1);
             }
             devices[deviceNum++]=communityWarm[i];
         }
@@ -639,9 +767,9 @@ void MainWindow::dealSearch()
                 switch(communityAirConditioner[i]->getGear())
                 {
                 default:break;
-                case OpenStatus::low:temp+=tr("空调设备%1档位:低").arg(i+1);break;
-                case OpenStatus::median:temp+=tr("空调设备%1档位:中").arg(i+1);break;
-                case OpenStatus::high:temp+=tr("空调设备%1档位:高").arg(i+1);break;
+                case OpenStatus::low:temp+=tr("空调设备%1档位:低").arg(i-localNum*2+1);break;
+                case OpenStatus::median:temp+=tr("空调设备%1档位:中").arg(i-localNum*2+1);break;
+                case OpenStatus::high:temp+=tr("空调设备%1档位:高").arg(i-localNum*2+1);break;
                 }
                 temp+=tr("\n温度:%1,风速:%2\n")
                         .arg(communityAirConditioner[i]->getTemperature())
@@ -649,7 +777,7 @@ void MainWindow::dealSearch()
             }
             else
             {
-                temp+=tr("空调设备%1已关闭\n").arg(i+1);
+                temp+=tr("空调设备%1已关闭\n").arg(i-localNum*2+1);
             }
             devices[deviceNum++]=communityAirConditioner[i];
         }
@@ -703,69 +831,80 @@ void MainWindow::addTextToInfoDisplayBox(const QString &text)
     InfoDisplayBox->insertPlainText(text);
 }
 
-void MainWindow::dealBitmap(deviceLocal deviceLocalName,unsigned char *message)
+void MainWindow::dealBitMapT(unsigned char info,int deviceNum,OpenStatus *devices[])
 {
-    int deviceNum=0;
-    switch(deviceLocalName)
+    unsigned char mask=0x03;
+    for(int i=6;deviceNum!=0;--deviceNum,i-=2)
     {
-        default:return;
-        case deviceLocal::studentHotWaterSys:
-        case deviceLocal::studentAirConditionerSys:deviceNum=studentDeviceNum;break;
-        case deviceLocal::villaHotWaterSys:deviceNum=villaHotWaterNum;break;
-        case deviceLocal::villaWarmSys:deviceNum=villaWarmNum;break;
-        case deviceLocal::villaAirConditionerSys:deviceNum=villaAirConditionerNum;break;
-        case deviceLocal::communityHotWaterSys:deviceNum=communityHotWaterNum;break;
-        case deviceLocal::communityWarmSys:deviceNum=communityWarmNum;break;
-        case deviceLocal::communityAirConditionerSys:deviceNum=communityAirConditionerNum;break;
-    }
-
-    int now=0;
-    for(int i=0;;)
-    {
-        for(int j=7;j!=-1&&i!=deviceNum;--j,++i)
+        switch((info&(mask<<i))>>i)
         {
-            if((static_cast<unsigned char>(*message)>>j)&0x01)
-            {
-                setDeviceStatus(deviceLocalName,now,deviceStatus::open);
-            }
-            else
-            {
-                setDeviceStatus(deviceLocalName,now,deviceStatus::close);
-            }
-            now++;
+        default:break;
+        case 0:devices[3-i/2]->setStatus(false);break;
+        case 1:devices[3-i/2]->setStatus(true,OpenStatus::low);break;
+        case 2:devices[3-i/2]->setStatus(true,OpenStatus::median);break;
+        case 3:devices[3-i/2]->setStatus(true,OpenStatus::high);break;
         }
-        if(i==deviceNum)
-        {
-            break;
-        }
-        message++;
     }
 }
 
-void MainWindow::dealOpenRequest(unsigned int deviceLocalName, unsigned char *message)
+void MainWindow::dealInfo(unsigned char *info)
 {
-    /*num,status,gear,t,w*/
-    switch(message[2])
+    static unsigned char oldInfo[11];
+
+    for(int i=0;i!=11;++i)
     {
-    default:break;
-    case 0:
-        deviceGroup[deviceLocalName][message[0]]->setStatus(message[1],message[3],message[4],OpenStatus::low);
-        break;
-    case 1:
-        deviceGroup[deviceLocalName][message[0]]->setStatus(message[1],message[3],message[4],OpenStatus::median);
-        break;
-    case 2:
-        deviceGroup[deviceLocalName][message[0]]->setStatus(message[1],message[3],message[4],OpenStatus::high);
-        break;
+        if(oldInfo[i]^info[i])
+        {
+            oldInfo[i]=info[i];
+            switch(i)
+            {
+            default:break;
+            case 0:dealBitMapT(info[i],4,deviceGroup[studentHotWaterSys]);break;
+            case 1:dealBitMapT(info[i],4,deviceGroup[studentAirConditionerSys]);break;
+
+            case 2:dealBitMapT(info[i],4,deviceGroup[villaHotWaterSys]);break;
+            case 3:dealBitMapT(info[i],1,deviceGroup[villaHotWaterSys]+4);break;
+
+            case 4:dealBitMapT(info[i],4,deviceGroup[villaWarmSys]);break;
+            case 5:dealBitMapT(info[i],4,deviceGroup[villaWarmSys]+4);break;
+
+            case 6:dealBitMapT(info[i],4,deviceGroup[villaAirConditionerSys]);break;
+            case 7:dealBitMapT(info[i],4,deviceGroup[villaAirConditionerSys]+4);break;
+
+            case 8:dealBitMapT(info[i],2,deviceGroup[communityHotWaterSys]);break;
+            case 9:dealBitMapT(info[i],4,deviceGroup[communityWarmSys]);break;
+            case 10:dealBitMapT(info[i],4,deviceGroup[communityAirConditionerSys]);break;
+            }
+        }
+        else
+        {
+            continue;
+        }
     }
 }
 
-void MainWindow::ReceiveData(const std::string &src)
+void MainWindow::ReceiveData()
 {
-    auto message=src.c_str();
-    if(message[0]=='H'&&static_cast<unsigned char>(message[1])<0x08)//修改单个设备状态
+    QByteArray message;
+    if(ser.bytesAvailable()<12)
     {
-        dealOpenRequest(static_cast<unsigned int>(message[1]),(unsigned char*)(message+2));
+        return;
+    }
+    else
+    {
+        while(ser.bytesAvailable()>=12)
+        {
+            message=ser.read(12);
+        }
+    }
+    if(message[0]=='H')//数据头
+    {
+        auto info=message.data();
+        dealInfo((unsigned char*)(info+1));
+    }
+    else
+    {
+        addTextToInfoDisplayBox(tr("收到错误数据\n"));
     }
 }
 

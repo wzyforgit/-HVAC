@@ -1,10 +1,11 @@
 #ifndef MAINWINDOW_H
 #define MAINWINDOW_H
 
+#include <QtSerialPort/QSerialPort>
+#include <QtSerialPort/QSerialPortInfo>
 #include <QMainWindow>
 #include <QGridLayout>
 #include <QLineEdit>
-#include "tcpserver.h"
 #include "openstatus.h"
 #include "searchDialog.h"
 
@@ -54,6 +55,8 @@ class MainWindow : public QMainWindow
 
     static const int saveCycle=1*60*1000;//30分钟存档一次
 
+    static const int ReceiveCycle=1000;//一秒读取一次数据
+
     const char *dbLocal="lastHour.log";
 
     enum deviceStatus
@@ -82,11 +85,12 @@ signals:
     deviceStatusChange(int,deviceStatus);
 public slots:
     void setDeviceStatus(deviceLocal local, int deviceNum, deviceStatus status);
-    void ReceiveData(const std::string &src);
+    void ReceiveData();
     void addTextToInfoDisplayBox(const QString &text);
     void dealSearch();
     void saveData();
     void readData();
+    void comSwitch();
 private:
     QSplitter *All;
     void createAll();
@@ -112,12 +116,13 @@ private:
 
     OpenStatus **deviceGroup[deviceLocalNum];
 
-    void dealBitmap(deviceLocal deviceLocalName, unsigned char *message);
-    void dealOpenRequest(unsigned int deviceLocalName, unsigned char *message);
     void saveT(FILE* fp,OpenStatus *devices[],int num);
     void readT(FILE* fp,OpenStatus *devices[],int num);
 
     void createConsole();
+    QLabel *comLabel;
+    QComboBox *ComBox;
+    QPushButton *UartSwitch;
     QLabel *ConsoleLabel;
     QLineEdit *searchBox;
     QPushButton *searchStart;
@@ -132,8 +137,16 @@ private:
     QPushButton *cleanInfoDisplayBox;
     QVBoxLayout *UartSetLayout;
 
-    tcpServer *server;
     searchDialog *searchResult;
+
+    void updateComBox(const QList<QSerialPortInfo> &now);
+    QString getComName(const QString &ComBoxText);
+    void dealInfo(unsigned char *info);
+    void dealBitMapT(unsigned char info,int deviceNum,OpenStatus *devices[]);
+    bool fComOpen=false;
+    QSerialPort ser;
+    QTimer *ReceiveTimer;
+    QTimer *updateSerialInfo;
 };
 
 #endif // MAINWINDOW_H

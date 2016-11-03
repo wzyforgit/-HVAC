@@ -28,7 +28,7 @@ void OpenStatus::totalNow()
     startTime=QDateTime::currentDateTime().toTime_t();
 }
 
-void OpenStatus::setStatus(bool now, qint8 t, qint8 w, gear gearSet)
+void OpenStatus::setStatus(bool now, gear gearSet, qint8 t, qint8 w)
 {
     if((status==now&&gearNow==gearSet)||(status==false&&now==false))//状态相同
     {

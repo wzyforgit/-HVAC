@@ -44,7 +44,7 @@ public:
 signals:
 
 public slots:
-    void setStatus(bool now,qint8 t=0,qint8 w=0,gear gearSet=gear::low);
+    void setStatus(bool now,gear gearSet=gear::low,qint8 t=0,qint8 w=0);
     void totalNow();
 
 private:

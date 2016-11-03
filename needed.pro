@@ -5,7 +5,7 @@
 #-------------------------------------------------
 
 QT       += core gui \
-            network
+            serialport
 
 greaterThan(QT_MAJOR_VERSION, 4): QT += widgets
 
@@ -17,11 +17,9 @@ SOURCES += main.cpp\
         mainwindow.cpp \
     openstatus.cpp \
     common.cpp \
-    tcpserver.cpp \
     searchDialog.cpp
 
 HEADERS  += mainwindow.h \
     openstatus.h \
     common.h \
-    tcpserver.h \
     searchDialog.h
